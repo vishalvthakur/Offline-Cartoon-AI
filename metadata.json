@@ -1,0 +1,6 @@
+{
+  "name": "Offline Cartoon AI",
+  "description": "An offline video to 3D cartoon, anime, and artistic converter app that runs entirely on-device.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
