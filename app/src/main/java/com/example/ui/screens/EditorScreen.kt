@@ -28,6 +28,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.viewmodel.VideoViewModel
+import com.example.ui.components.VideoPreviewComponent
+import com.example.ui.components.TrimRangeSliderComponent
 
 data class StyleItem(val name: String, val icon: ImageVector, val desc: String, val tint: Color)
 
@@ -42,6 +44,8 @@ fun EditorScreen(
     val selectedVideoUri by viewModel.selectedVideoUri.collectAsState()
     val selectedStyle by viewModel.selectedStyle.collectAsState()
     val selectedQuality by viewModel.selectedQuality.collectAsState()
+    val trimStartMs by viewModel.trimStartMs.collectAsState()
+    val trimEndMs by viewModel.trimEndMs.collectAsState()
 
     val videoName by viewModel.videoName.collectAsState()
     val videoResolution by viewModel.videoResolution.collectAsState()
@@ -129,49 +133,26 @@ fun EditorScreen(
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // Video Source Info Box
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PlayCircle,
-                            contentDescription = "Source Video",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
+            // Video Source Info Box with integrated Offline Player Preview
+            selectedVideoUri?.let { uri ->
+                VideoPreviewComponent(
+                    videoUri = uri,
+                    videoName = videoName,
+                    videoResolution = videoResolution,
+                    sizeMbStr = sizeMbStr,
+                    durationSec = durationSec
+                )
 
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = videoName,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1
-                        )
-                        Text(
-                            text = "$videoResolution • $sizeMbStr • ${durationSec}s",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                TrimRangeSliderComponent(
+                    videoDurationMs = videoDurationMs,
+                    trimStartMs = trimStartMs,
+                    trimEndMs = trimEndMs,
+                    onTrimRangeChanged = { start, end ->
+                        viewModel.setTrimRange(start, end)
                     }
-                }
+                )
             }
 
             // Section 1: Style Swatches Carousel

@@ -158,6 +158,8 @@ class VideoProcessingService : Service() {
             videoUri = videoUri,
             styleName = item.styleName,
             qualityMode = item.qualityMode,
+            trimStartMs = item.trimStartMs,
+            trimEndMs = item.trimEndMs,
             listener = object : VideoProcessorEngine.ProgressListener {
                 override fun onProgress(current: Int, total: Int, percent: Float, estRemainingSec: Long) {
                     _currentFrame.value = current
@@ -210,6 +212,7 @@ class VideoProcessingService : Service() {
                 repository.updateQueueItem(processingItem.copy(status = "FAILED", progress = 0f))
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e("VideoProcessingService", "Failed to convert item ${item.id}", e)
             repository.updateQueueItem(processingItem.copy(status = "FAILED", progress = 0f))
             kotlinx.coroutines.delay(2000)
@@ -222,11 +225,18 @@ class VideoProcessingService : Service() {
         isQueueLoopRunning = false
         conversionJob?.cancel()
 
+        // Reset progress trackers
+        _processingProgress.value = 0f
+        _currentFrame.value = 0
+        _totalFrames.value = 0
+        _estimatedTimeRemainingSec.value = 0L
+
         serviceScope.launch(Dispatchers.IO) {
             val processingItem = repository.getProcessingQueueItem()
             if (processingItem != null) {
                 repository.updateQueueItem(processingItem.copy(status = "FAILED"))
             }
+            repository.clearQueue()
         }
 
         stopForegroundAndComplete("Conversion was cancelled.")

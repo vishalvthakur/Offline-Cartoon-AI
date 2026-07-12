@@ -67,6 +67,17 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private val _videoName = MutableStateFlow("")
     val videoName: StateFlow<String> = _videoName.asStateFlow()
 
+    private val _trimStartMs = MutableStateFlow(0L)
+    val trimStartMs: StateFlow<Long> = _trimStartMs.asStateFlow()
+
+    private val _trimEndMs = MutableStateFlow(0L)
+    val trimEndMs: StateFlow<Long> = _trimEndMs.asStateFlow()
+
+    fun setTrimRange(startMs: Long, endMs: Long) {
+        _trimStartMs.value = startMs
+        _trimEndMs.value = endMs
+    }
+
     // Active conversion session metadata bridged from VideoProcessingService
     val isProcessing: StateFlow<Boolean> = VideoProcessingService.isProcessing
     val progress: StateFlow<Float> = VideoProcessingService.processingProgress
@@ -97,6 +108,8 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                 
                 val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                 _videoDurationMs.value = duration
+                _trimStartMs.value = 0L
+                _trimEndMs.value = duration
 
                 val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
                 val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
@@ -124,6 +137,8 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                 _videoResolution.value = "720x1280"
                 _videoSizeMb.value = 0.0
                 _videoDurationMs.value = 0L
+                _trimStartMs.value = 0L
+                _trimEndMs.value = 0L
             } finally {
                 try {
                     retriever.release()
@@ -144,7 +159,9 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                 videoName = name,
                 styleName = style,
                 qualityMode = quality,
-                status = "PENDING"
+                status = "PENDING",
+                trimStartMs = _trimStartMs.value,
+                trimEndMs = _trimEndMs.value
             )
             repository.insertQueueItem(item)
 
@@ -185,6 +202,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
             action = VideoProcessingService.ACTION_CANCEL
         }
         context.startService(serviceIntent)
+        resetSelection()
     }
 
     fun deleteHistoryItem(item: ConversionHistory) {
@@ -210,5 +228,9 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         _videoResolution.value = ""
         _videoSizeMb.value = 0.0
         _videoDurationMs.value = 0L
+        _trimStartMs.value = 0L
+        _trimEndMs.value = 0L
+        _selectedStyle.value = "3D Cartoon"
+        _selectedQuality.value = "BALANCED"
     }
 }

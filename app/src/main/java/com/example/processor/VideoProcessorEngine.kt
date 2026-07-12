@@ -40,6 +40,8 @@ class VideoProcessorEngine(private val context: Context) {
         videoUri: Uri,
         styleName: String,
         qualityMode: String,
+        trimStartMs: Long = 0L,
+        trimEndMs: Long = -1L,
         listener: ProgressListener
     ) = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
@@ -49,6 +51,10 @@ class VideoProcessorEngine(private val context: Context) {
 
             val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
             val durationMs = durationStr?.toLongOrNull() ?: 0L
+
+            val actualStartMs = trimStartMs.coerceIn(0L, durationMs)
+            val actualEndMs = if (trimEndMs <= 0L || trimEndMs > durationMs) durationMs else trimEndMs
+            val trimmedDurationMs = (actualEndMs - actualStartMs).coerceAtLeast(0L)
             
             val widthStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
             val heightStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
@@ -67,9 +73,9 @@ class VideoProcessorEngine(private val context: Context) {
             var fps = fpsStr.toFloatOrNull()?.toInt() ?: 30
             if (fps <= 0 || fps > 120) fps = 30 // Sanitize frame rate
 
-            val totalFrames = ((durationMs / 1000f) * fps).toInt().coerceAtLeast(1)
+            val totalFrames = ((trimmedDurationMs / 1000f) * fps).toInt().coerceAtLeast(1)
 
-            Log.i("VideoProcessor", "Video Info: Duration ${durationMs}ms, FrameRate $fps, TotalFrames $totalFrames, Quality: $qualityMode ($targetWidth x $targetHeight)")
+            Log.i("VideoProcessor", "Video Info: Duration ${trimmedDurationMs}ms (Trimmed), FrameRate $fps, TotalFrames $totalFrames, Quality: $qualityMode ($targetWidth x $targetHeight)")
 
             // Set up local temp directory and files
             val tempDir = File(context.cacheDir, "OfflineCartoonAI")
@@ -90,7 +96,8 @@ class VideoProcessorEngine(private val context: Context) {
                 tempOutputFile = tempVideoOnlyFile,
                 totalFrames = totalFrames,
                 fps = fps,
-                durationMs = durationMs,
+                durationMs = trimmedDurationMs,
+                actualStartMs = actualStartMs,
                 targetWidth = targetWidth,
                 targetHeight = targetHeight,
                 styleName = styleName,
@@ -100,7 +107,7 @@ class VideoProcessorEngine(private val context: Context) {
 
             // Audio extraction and final muxing
             listener.onStatusUpdate("Preserving and blending audio tracks...")
-            val success = muxAudioAndVideo(context, videoUri, tempVideoOnlyFile, tempFinalFile)
+            val success = muxAudioAndVideo(context, videoUri, tempVideoOnlyFile, tempFinalFile, actualStartMs, actualEndMs)
 
             val finalFileToSave = if (success) tempFinalFile else tempVideoOnlyFile
 
@@ -118,6 +125,7 @@ class VideoProcessorEngine(private val context: Context) {
             listener.onCompleted(savedUriStr ?: finalFileToSave.absolutePath)
 
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e("VideoProcessor", "Offline processing failed", e)
             listener.onError(e.localizedMessage ?: "Unknown on-device error")
         } finally {
@@ -133,12 +141,13 @@ class VideoProcessorEngine(private val context: Context) {
      * Reads frames from MediaMetadataRetriever, feeds them into CartoonModelInterpreter,
      * applies face stabilization and temporal consistency, then encodes them to a temporary MP4 using MediaCodec.
      */
-    private fun encodeStylizedFrames(
+    private suspend fun encodeStylizedFrames(
         videoUri: Uri,
         tempOutputFile: File,
         totalFrames: Int,
         fps: Int,
         durationMs: Long,
+        actualStartMs: Long,
         targetWidth: Int,
         targetHeight: Int,
         styleName: String,
@@ -173,11 +182,19 @@ class VideoProcessorEngine(private val context: Context) {
 
         try {
             for (f in 0 until totalFrames) {
-                val timeUs = f * frameIntervalUs
-                if (timeUs >= totalDurationUs) break
+                // Check if the current coroutine is cancelled to abort quickly
+                val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+                if (job?.isActive == false) {
+                    throw kotlinx.coroutines.CancellationException("Conversion cancelled by user")
+                }
+
+                val presentationTimeUs = f * frameIntervalUs
+                if (presentationTimeUs >= totalDurationUs) break
+
+                val fetchTimeUs = (actualStartMs * 1000L) + presentationTimeUs
 
                 // 1. Retrieve raw frame Bitmap
-                val rawFrame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST) ?: continue
+                val rawFrame = retriever.getFrameAtTime(fetchTimeUs, MediaMetadataRetriever.OPTION_CLOSEST) ?: continue
 
                 // 2. Run stylization
                 var stylized = interpreter.stylizeFrame(rawFrame, styleName, targetWidth, targetHeight)
@@ -211,7 +228,7 @@ class VideoProcessorEngine(private val context: Context) {
                     inputBufferIndex,
                     0,
                     yuvBytes.size,
-                    timeUs,
+                    presentationTimeUs,
                     if (f == totalFrames - 1) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
                 )
 
@@ -276,7 +293,9 @@ class VideoProcessorEngine(private val context: Context) {
         context: Context,
         originalVideoUri: Uri,
         videoOnlyFile: File,
-        outputFile: File
+        outputFile: File,
+        actualStartMs: Long,
+        actualEndMs: Long
     ): Boolean {
         val extractor = MediaExtractor()
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
@@ -351,18 +370,28 @@ class VideoProcessorEngine(private val context: Context) {
                 videoExtractor.advance()
             }
 
-            // 5. Mux Audio Track
+            // 5. Mux Audio Track with proper trim and time shift offset
             extractor.selectTrack(audioTrackIndex)
+            extractor.seekTo(actualStartMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+
             var audioBuffer = ByteBuffer.allocate(1024 * 1024)
             var audioBufferInfo = MediaCodec.BufferInfo()
 
+            val startUs = actualStartMs * 1000L
+            val endUs = actualEndMs * 1000L
+
             while (true) {
+                val sampleTime = extractor.sampleTime
+                if (sampleTime > endUs || sampleTime < 0) {
+                    break
+                }
                 audioBufferInfo.size = extractor.readSampleData(audioBuffer, 0)
                 if (audioBufferInfo.size < 0) {
                     break
                 }
                 audioBufferInfo.offset = 0
-                audioBufferInfo.presentationTimeUs = extractor.sampleTime
+                // Align audio stream to 0 relative to trim start
+                audioBufferInfo.presentationTimeUs = (sampleTime - startUs).coerceAtLeast(0L)
                 audioBufferInfo.flags = extractor.sampleFlags
                 muxer.writeSampleData(newAudioTrack, audioBuffer, audioBufferInfo)
                 extractor.advance()

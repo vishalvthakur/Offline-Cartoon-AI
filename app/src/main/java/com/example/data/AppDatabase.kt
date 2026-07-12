@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [ConversionHistory::class, QueueItem::class], version = 2, exportSchema = false)
+@Database(entities = [ConversionHistory::class, QueueItem::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversionDao(): ConversionDao
     abstract fun queueDao(): QueueDao

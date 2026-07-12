@@ -12,5 +12,7 @@ data class QueueItem(
     val qualityMode: String,
     val status: String, // "PENDING", "PROCESSING", "COMPLETED", "FAILED"
     val timestamp: Long = System.currentTimeMillis(),
-    val progress: Float = 0f
+    val progress: Float = 0f,
+    val trimStartMs: Long = 0L,
+    val trimEndMs: Long = -1L
 )
